@@ -11,53 +11,53 @@ before_script:
 cache:
   key: DMD_LATEST
   paths:
-    - ~/dlang/dmd-2.087.1/
+    - ~/dlang/dmd-2.087.1/**/*
 
 stages:
-  - build_debug
-  - test
-  - build_release
+  - Build Debug
+  - Test
+  - Build Release
 
 # Make sure the main build types (release, debug, and unittest) work for both architectures.
 # I've had issues in the past where some of my code won't compile in both (mostly forgetting to use size_t somewhere) which is why both are tested.
 Build Debug x86:
-  stage: build_debug
+  stage: Build Debug
   script:
       - dub build --build=debug --arch=x86
   variables:
       BUILD_ARCH: "32"
 
 Build Debug x64:
-  stage: build_debug
+  stage: Build Debug
   script:
       - dub build --build=debug --arch=x86_64
   variables:
       BUILD_ARCH: "64"
 
 Build Release x86:
-  stage: build_release
+  stage: Build Release
   script:
       - dub build --build=release --arch=x86
   variables:
       BUILD_ARCH: "32"
 
 Build Release x64:
-  stage: build_release
+  stage: Build Release
   script:
       - dub build --build=release --arch=x86_64
   variables:
       BUILD_ARCH: "64"
 
 Test x86:
-  stage: test
+  stage: Test
   script:
-      - dub test
+      - dub Test
   variables:
       BUILD_ARCH: "32"
 
 Test x64:
-  stage: test
+  stage: Test
   script:
-      - dub test
+      - dub Test
   variables:
       BUILD_ARCH: "64"
