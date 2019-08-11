@@ -1,0 +1,15 @@
+.dub
+docs.json
+__dummy.html
+docs/
+/jioc
+jioc.so
+jioc.dylib
+jioc.dll
+jioc.a
+jioc.lib
+jioc-test-*
+*.exe
+*.o
+*.obj
+*.lst
