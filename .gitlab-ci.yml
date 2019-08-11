@@ -3,10 +3,15 @@ before_script:
   - if [ "$BUILD_ARCH" = "32" ]; then apt-get install -y gcc-multilib libc6-dev-i386 --no-install-recommends --allow-unauthenticated; fi
   - if [ "$BUILD_ARCH" = "64" ]; then apt-get install -y gcc libc6-dev --no-install-recommends --allow-unauthenticated; fi
   - if [ "$BUILD_ARCH" = "" ]; then echo "NO BUILD_ARCH ENVIRONMENT VARIABLE"; fi
-  - curl https://dlang.org/install.sh | bash -s dmd-2.087.1
+  - if [ ! -d "~/dlang/dmd-2.087.1/" ]; then curl https://dlang.org/install.sh | bash -s dmd-2.087.1; fi
   - source ~/dlang/dmd-2.087.1/activate
   - dmd --version
   - dub --version
+
+cache:
+  key: DMD_LATEST
+  paths:
+    - ~/dlang/dmd-2.087.1/
 
 stages:
   - build_debug
@@ -15,42 +20,42 @@ stages:
 
 # Make sure the main build types (release, debug, and unittest) work for both architectures.
 # I've had issues in the past where some of my code won't compile in both (mostly forgetting to use size_t somewhere) which is why both are tested.
-build_debug_x86:
+Build Debug x86:
   stage: build_debug
   script:
       - dub build --build=debug --arch=x86
   variables:
       BUILD_ARCH: "32"
 
-build_debug_x64:
+Build Debug x64:
   stage: build_debug
   script:
       - dub build --build=debug --arch=x86_64
   variables:
       BUILD_ARCH: "64"
 
-build_release_x86:
+Build Release x86:
   stage: build_release
   script:
       - dub build --build=release --arch=x86
   variables:
       BUILD_ARCH: "32"
 
-build_release_x64:
+Build Release x64:
   stage: build_release
   script:
       - dub build --build=release --arch=x86_64
   variables:
       BUILD_ARCH: "64"
 
-test_x86:
+Test x86:
   stage: test
   script:
       - dub test
   variables:
       BUILD_ARCH: "32"
 
-test_x64:
+Test x64:
   stage: test
   script:
       - dub test
