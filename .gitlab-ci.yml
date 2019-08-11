@@ -11,7 +11,7 @@ before_script:
 cache:
   key: DMD_LATEST
   paths:
-    - /root/dlang/dmd-2.087.1/**/*
+    - /root/dlang/dmd-2.087.1/
 
 stages:
   - Build Debug
