@@ -3,7 +3,7 @@ before_script:
   - if [ "$BUILD_ARCH" = "32" ]; then apt-get install -y gcc-multilib libc6-dev-i386 --no-install-recommends --allow-unauthenticated; fi
   - if [ "$BUILD_ARCH" = "64" ]; then apt-get install -y gcc libc6-dev --no-install-recommends --allow-unauthenticated; fi
   - if [ "$BUILD_ARCH" = "" ]; then echo "NO BUILD_ARCH ENVIRONMENT VARIABLE"; fi
-  - if [ ! -d "~/dlang/dmd-2.087.1/" ]; then curl https://dlang.org/install.sh | bash -s dmd-2.087.1; fi
+  - if [ ! -d "~/dlang/dmd-2.087.1/" ]; then curl https://dlang.org/install.sh | bash -s dmd-2.087.1 -p $CI_PROJECT_DIR/dlang/; fi
   - source ~/dlang/dmd-2.087.1/activate
   - dmd --version
   - dub --version
@@ -11,7 +11,7 @@ before_script:
 cache:
   key: DMD_LATEST
   paths:
-    - /root/dlang/dmd-2.087.1/
+    - ./dlang/
 
 stages:
   - Build Debug
