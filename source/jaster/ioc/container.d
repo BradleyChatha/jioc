@@ -659,13 +659,11 @@ unittest
 }
 
 /++
- + A helper function that makes use of `injectAndExecute` to construct an instance of a class.
+ + A helper function that makes use of `injectAndExecute` to construct an instance of a class/struct.
  +
  + All notes, descriptions, limitations, etc. are described in `injectAndExecute`'s documentation.
  +
  + Limitations:
- +  Currently only classes are supported.
- +
  +  If there are multiple constructors, then whichever one `Parameters!(__traits(getMember, T, "__ctor"))` decides to return
  +  the parameters of will be used. I do plan to add a UDA to specify which one to use.
  +
@@ -673,14 +671,18 @@ unittest
  +  A newly constructed `T`, where it's constructor was injected with `injectAndExecute`.
  + ++/
 T injectAndConstruct(alias T)(ServiceProvider provider)
-if(is(T == class))
+if(is(T == class) || is(T == struct))
 {
     import std.traits : Parameters;
 
     static if(__traits(hasMember, T, "__ctor"))
     {
         alias CtorParams = Parameters!(__traits(getMember, T, "__ctor"));
-        return provider.injectAndExecute((CtorParams params) => new T(params));
+
+        static if(is(T == class))
+            return provider.injectAndExecute((CtorParams params) => new T(params));
+        else
+            return provider.injectAndExecute((CtorParams params) => T(params));
     }
     else
         return T.init;
@@ -711,6 +713,14 @@ unittest
         }
     }
 
+    static struct StructService
+    {
+        this(IConfig!Config config)
+        {
+            assert(config !is null);
+        }
+    }
+
     auto provider = new ServiceProvider();
     provider.configureServices((scope services)
     {
@@ -719,4 +729,6 @@ unittest
 
     auto obj = provider.injectAndConstruct!NonServiceButStillInjected();
     assert(obj.isAEqualToB);
+
+    provider.injectAndConstruct!StructService();
 }
