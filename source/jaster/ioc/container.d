@@ -685,7 +685,12 @@ if(is(T == class) || is(T == struct))
             return provider.injectAndExecute((CtorParams params) => T(params));
     }
     else
-        return T.init;
+    {
+        static if(is(T == class))
+            return new T();
+        else
+            return T.init;
+    }
 }
 ///
 unittest
@@ -731,4 +736,14 @@ unittest
     assert(obj.isAEqualToB);
 
     provider.injectAndConstruct!StructService();
+}
+
+// Bug test: Classes without a ctor should still be created.
+unittest
+{
+    static class C{int a;}
+    auto provider = new ServiceProvider();
+
+    auto c = provider.injectAndConstruct!C();
+    assert(c !is null);
 }
