@@ -182,6 +182,7 @@ final class ServiceProvider
     import std.typecons : Nullable, nullable;
 
     alias ServiceInstanceDictionary = Object[ServiceInfo];
+    enum BITS_PER_MASK = long.sizeof * 8;
 
     private
     {
@@ -189,7 +190,7 @@ final class ServiceProvider
         ServiceInfo[]               _allServices;
         ServiceInstanceDictionary[] _scopes;
         ServiceInstanceDictionary   _singletons;
-        long                        _scopeInUseMask;
+        long[]                      _scopeInUseMasks;
 
         Object getServiceOrNull(TypeInfo baseType, ref scope ServiceScope serviceScope)
         {
@@ -225,6 +226,52 @@ final class ServiceProvider
                     return instance;
             }
         }
+
+        @safe
+        ref long getScopeMaskByScopeIndex(size_t index) nothrow
+        {
+            const indexIntoArray = (index / BITS_PER_MASK);
+
+            if(indexIntoArray >= this._scopeInUseMasks.length)
+                this._scopeInUseMasks.length = indexIntoArray + 1;
+
+            return this._scopeInUseMasks[indexIntoArray];
+        }
+
+        @safe
+        bool isScopeInUse(size_t index) nothrow
+        {
+            const bitInMask = (index % BITS_PER_MASK);
+            const mask      = this.getScopeMaskByScopeIndex(index);
+
+            return (mask & (1 << bitInMask)) > 0;
+        }
+
+        @safe
+        void setScopeInUse(size_t index, bool isInUse) nothrow
+        {
+            const bitInMask = (index % BITS_PER_MASK);
+            const bitToUse  = (1 << bitInMask);
+
+            if(isInUse)
+                this.getScopeMaskByScopeIndex(index) |= bitToUse;
+            else
+                this.getScopeMaskByScopeIndex(index) &= ~bitToUse;
+        }
+        ///
+        unittest
+        {
+            auto services = new ServiceProvider(null);
+            assert(!services.isScopeInUse(65));
+
+            services.setScopeInUse(65, true);
+            assert(services.isScopeInUse(65));
+            assert(services._scopeInUseMasks.length == 2);
+            assert(services._scopeInUseMasks[1] == 0b10); // 65 % 64 = 1. 1 << 1 = 0b10
+            
+            services.setScopeInUse(65, false);
+            assert(!services.isScopeInUse(65));
+        }
     }
 
     this(ServiceInfo[] services)
@@ -238,19 +285,13 @@ final class ServiceProvider
         @safe
         ServiceScope createScope()
         {
-            // TODO: Too lazy to make the logic for an array of longs, so we're technically limited to 64 simultaneous scopes.
-            assert(
-                this._scopes.length <= ulong.sizeof * 8, 
-                "Because of laziness, there's currently a hard limit of 64 scopes. Poke me about it and I'll fix it though."
-            );
-
             size_t index = 0;
             foreach(i; 0..ulong.sizeof * 8)
             {
-                if((this._scopeInUseMask & (1 << i)) == 0)
+                if(!this.isScopeInUse(i))
                 {
                     index = i;
-                    this._scopeInUseMask |= (1 << index);
+                    this.setScopeInUse(i, true);
                     break;
                 }
             }
@@ -278,21 +319,20 @@ final class ServiceProvider
             provider.destroyScope(scopes[1]); // Index 2
             assert(scopes[1]._index == 0);
             assert(scopes[1]._provider is null);
-            assert(provider._scopeInUseMask == 0b1011);
+            assert(provider._scopeInUseMasks[0] == 0b1011);
 
             scopes[1] = provider.createScope();
             assert(scopes[1]._index == 2);
-            assert(provider._scopeInUseMask == 0b1111);
+            assert(provider._scopeInUseMasks[0] == 0b1111);
         }
 
         void destroyScope(ref scope ServiceScope serviceScope)
         {
             assert(serviceScope._provider is this, "Attempting to destroy service scope who does not belong to this `ServiceProvider`.");
-            assert((this._scopeInUseMask & (1 << serviceScope._index)) > 0, "Bug?");
-            assert(serviceScope._index <= ulong.sizeof * 8, "Lazy");
+            assert(this.isScopeInUse(serviceScope._index), "Bug?");
 
             // For now, just clear the AA. Later on I'll want to add more behaviour though.
-            this._scopeInUseMask &= ~(1 << serviceScope._index);
+            this.setScopeInUse(serviceScope._index, false);
             this._scopes[serviceScope._index].clear();
 
             serviceScope._index = 0;
@@ -499,7 +539,7 @@ unittest
     {
         scopeB = services.createScope();
         assert(scopeB._index == 2);
-        assert(services._scopeInUseMask == 0b101);
+        assert(services._scopeInUseMasks[0] == 0b101);
     }
 
     services.destroyScope(scopeB);
@@ -513,8 +553,8 @@ unittest
         assert(scopeB._index == 2);
     }
 
-    assert(services._scopeInUseMask == 0b101);
+    assert(services._scopeInUseMasks[0] == 0b101);
     scopeB = services.createScope();
     assert(scopeB._index == 1);
-    assert(services._scopeInUseMask == 0b11);
+    assert(services._scopeInUseMasks[0] == 0b11);
 }
