@@ -45,7 +45,7 @@ void main()
         ServiceInfo.asScoped!LoginService
     ]);
 
-    auto loginService = services.getServiceOrNull!LoginService();
+    auto loginService = services.defaultScope.getServiceOrNull!LoginService();
     loginService.signup("dlang #1");
     loginService.signup("crash me baby");
 }
