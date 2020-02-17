@@ -48,14 +48,7 @@ Build Release x64:
   variables:
       BUILD_ARCH: "64"
 
-Test x86:
-  stage: Test
-  script:
-      - dub test
-  variables:
-      BUILD_ARCH: "32"
-
-Test x64:
+Test:
   stage: Test
   script:
       - dub test
