@@ -1,9 +1,20 @@
 module jaster.ioc.depinject;
 
+/// Describes the lifetime of a service.
 enum ServiceLifetime
 {
+    /// The service is constructed every single time it is requested.
     Transient,
+
+    /// The service is only constructed a single time for every `ServiceProvider`, regardless of which scope is used to access it.
     Singleton,
+
+    /++
+     + This service is constructed once per scope.
+     +
+     + See_Also:
+     +  `ServiceProvider.createScope`
+     + ++/
     Scoped
 }
 
@@ -15,11 +26,13 @@ private mixin template ServiceLifetimeFunctions(ServiceLifetime Lifetime)
     @safe nothrow pure
     public static
     {
+        ///
         ServiceInfo asRuntime(TypeInfo baseType, TypeInfo implType, FactoryFunc factory = null)
         {
             return ServiceInfo(baseType, implType, factory, Lifetime);
         }
 
+        ///
         ServiceInfo asTemplated(alias BaseType, alias ImplType)(FactoryFuncFor!ImplType factory = null)
         if(isValidBaseType!BaseType && isValidImplType!(BaseType, ImplType))
         {
@@ -29,12 +42,24 @@ private mixin template ServiceLifetimeFunctions(ServiceLifetime Lifetime)
             return ServiceInfo(typeid(BaseType), typeid(ImplType), factory, Lifetime);
         }
 
+        ///
         mixin("alias as"~Suffix~"Runtime = asRuntime;");
+
+        ///
         mixin("alias as"~Suffix~"(alias BaseType, alias ImplType) = asTemplated!(BaseType, ImplType);");
+
+        ///
         mixin("alias as"~Suffix~"(alias ImplType) = asTemplated!(ImplType, ImplType);");
     }
 }
 
+/++
+ + Describes a service.
+ +
+ + This struct cannot be created directly, you must use one of the static construction functions.
+ +
+ + For example, if you wanted the service to be a singleton, you could do `asSingleton!(IBaseType, ImplementationType)`.
+ + ++/
 struct ServiceInfo
 {
     alias FactoryFunc               = Object delegate(ref ServiceScope);
@@ -49,7 +74,6 @@ struct ServiceInfo
         TypeInfo        _implType;
         FactoryFunc     _factory;
         ServiceLifetime _lifetime;
-        Object          _singletonInstance; // Keep in mind we're in a struct here.
 
         @safe @nogc
         this(TypeInfo baseType, TypeInfo implType, FactoryFunc func, ServiceLifetime lifetime) nothrow pure
