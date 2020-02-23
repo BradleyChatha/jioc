@@ -1,5 +1,5 @@
 name "jioc"
-description "An inversion of control library."
+description "Dependency Injection inspired by ASP Core."
 authors "Bradley Chatha (SealabJaster)"
 copyright "Copyright © 2020, Bradley Chatha (SealabJaster)"
 license "MIT"
