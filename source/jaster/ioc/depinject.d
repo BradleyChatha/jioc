@@ -21,7 +21,7 @@ enum ServiceLifetime
 private mixin template ServiceLifetimeFunctions(ServiceLifetime Lifetime)
 {
     import std.conv : to;
-    const Suffix = Lifetime.to!string;
+    enum Suffix = Lifetime.to!string; // I *wish* this could be `const` instead of `enum`, but it produces a weird `cannot modify struct because immutable members` error.
 
     @safe nothrow pure
     public static
@@ -56,7 +56,7 @@ private mixin template ServiceLifetimeFunctions(ServiceLifetime Lifetime)
 /++
  + Describes a service.
  +
- + This struct cannot be created directly, you must use one of the static construction functions.
+ + This struct shouldn't be created directly, you must use one of the static construction functions.
  +
  + For example, if you wanted the service to be a singleton, you could do `asSingleton!(IBaseType, ImplementationType)`.
  + ++/
@@ -86,9 +86,6 @@ struct ServiceInfo
             assert(func !is null, "The factory function is null. The `asXXXRuntime` functions can't auto-generate one sadly, so provide your own.");
         }
     }
-
-    @disable
-    this();
 
     /// This is mostly for unit tests.
     @safe
@@ -149,15 +146,16 @@ unittest
 
 struct ServiceScope
 {
-    private size_t _index;
+    private size_t          _index;
     private ServiceProvider _provider;
+    private bool            _isMasterReference; // True = Scope is destroyed via this object. False = Scope can't be destroyed via this object.
 
     @disable
     this(this);
 
     ~this()
     {
-        if(this._provider !is null)
+        if(this._provider !is null && this._isMasterReference)
             this._provider.destroyScope(this);
     }
 
@@ -201,6 +199,25 @@ struct ServiceScope
     }
 }
 
+final class ServiceScopeAccessor
+{
+    // Since ServiceScope can't be copied, and we shouldn't exactly move it from it's default location, we need to re-store
+    // some of its info for later.
+    private ServiceProvider _provider; 
+    private size_t          _index;
+
+    private this(ref ServiceScope serviceScope)
+    {
+        this._provider = serviceScope._provider;
+        this._index    = serviceScope._index;
+    }
+
+    final ServiceScope serviceScope()
+    {
+        return ServiceScope(this._index, this._provider, false); // false = Not master scope object.
+    }
+}
+
 final class ServiceProvider
 {
     import std.typecons : Nullable, nullable;
@@ -210,9 +227,15 @@ final class ServiceProvider
 
     private
     {
+        struct ScopeInfo
+        {
+            ServiceInstanceDictionary instances;
+            ServiceScopeAccessor      accessor; // Written in a way that they only have to be constructed once, so GC isn't as mad.
+        }
+
         ServiceScope                _defaultScope;
         ServiceInfo[]               _allServices;
-        ServiceInstanceDictionary[] _scopes;
+        ScopeInfo[]                 _scopes;
         ServiceInstanceDictionary   _singletons;
         long[]                      _scopeInUseMasks;
 
@@ -231,12 +254,12 @@ final class ServiceProvider
                     return info._factory(serviceScope);
 
                 case Scoped:
-                    auto ptr = (cast()info in this._scopes[serviceScope._index]); // 'cus apparently const is too painful for it to handle.
+                    auto ptr = (cast()info in this._scopes[serviceScope._index].instances); // 'cus apparently const is too painful for it to handle.
                     if(ptr !is null)
                         return *ptr;
 
                     auto instance = info._factory(serviceScope);
-                    this._scopes[serviceScope._index][cast()info] = instance;
+                    this._scopes[serviceScope._index].instances[cast()info] = instance;
                     return instance;
 
                 case Singleton:
@@ -301,7 +324,23 @@ final class ServiceProvider
     this(ServiceInfo[] services)
     {
         this._defaultScope = this.createScope();
-        this._allServices = services.dup; // Bit wasteful, but ultimately meh. Used so we can guarentee our _singleton instance is unique to this service provider.
+
+        // I'm doing it this weird way to try and make the GC less angry.
+        const EXTRA_SERVICES = 2;
+        this._allServices.length                = services.length + EXTRA_SERVICES;
+        this._allServices[0..services.length]   = services[0..$];
+        this._allServices[services.length]      = ServiceInfo.asSingleton!ServiceProvider((ref _) => this); // Allow ServiceProvider to be injected.
+        this._allServices[services.length + 1]  = ServiceInfo.asScoped!ServiceScopeAccessor((ref serviceScope) // Add service to allowed services to access their scope's... scope.
+        {
+            auto instance = this._scopes[serviceScope._index].accessor;
+            if(instance !is null)
+                return instance;
+
+            instance = new ServiceScopeAccessor(serviceScope);
+            this._scopes[serviceScope._index].accessor = instance;
+
+            return instance;            
+        });
     }
 
     public final
@@ -323,7 +362,7 @@ final class ServiceProvider
             if(this._scopes.length <= index)
                 this._scopes.length = (index + 1);
 
-            return ServiceScope(index, this);
+            return ServiceScope(index, this, true);
         }
         ///
         unittest
@@ -354,10 +393,11 @@ final class ServiceProvider
         {
             assert(serviceScope._provider is this, "Attempting to destroy service scope who does not belong to this `ServiceProvider`.");
             assert(this.isScopeInUse(serviceScope._index), "Bug?");
+            assert(serviceScope._isMasterReference, "Attempting to destroy service scope who is not the master reference for the scope. (Did this ServiceScope come from ServiceScopeAccessor?)");
 
             // For now, just clear the AA. Later on I'll want to add more behaviour though.
             this.setScopeInUse(serviceScope._index, false);
-            this._scopes[serviceScope._index].clear();
+            this._scopes[serviceScope._index].instances.clear();
 
             serviceScope._index = 0;
             serviceScope._provider = null;
@@ -581,4 +621,38 @@ unittest
     scopeB = services.createScope();
     assert(scopeB._index == 1);
     assert(services._scopeInUseMasks[0] == 0b11);
+}
+
+// Test ServiceProvider injection
+unittest
+{
+    auto services = new ServiceProvider(null);
+
+    assert(services.defaultScope.getServiceOrNull!ServiceProvider() is services);
+}
+
+// Test ServiceScopeAccessor
+unittest
+{
+    auto services = new ServiceProvider(null);
+    
+    // Also test to make sure the slaveScope doesn't destroy the scope outright.
+    {
+        const slaveScope = services.defaultScope.getServiceOrNull!ServiceScopeAccessor().serviceScope;
+        assert(slaveScope._provider is services);
+        assert(slaveScope._index == 0);
+        assert(!slaveScope._isMasterReference);
+    }
+    assert(services._scopeInUseMasks[0] == 0b1);
+
+    // Test to make sure we only construct the accessor a single time per scope index.
+    auto masterScope = services.createScope();
+    assert(services._scopes[1].accessor is null);
+    assert(masterScope.getServiceOrNull!ServiceScopeAccessor() !is null);
+    assert(services._scopes[1].accessor !is null);
+
+    auto accessor = masterScope.getServiceOrNull!ServiceScopeAccessor();
+    services.destroyScope(masterScope);
+    masterScope = services.createScope();
+    assert(services._scopes[1].accessor is accessor);
 }
