@@ -3,14 +3,26 @@ module jaster.ioc.depinject;
 /// Describes the lifetime of a service.
 enum ServiceLifetime
 {
-    /// The service is constructed every single time it is requested.
+    /++
+     + The service is constructed every single time it is requested.
+     +
+     + These services are the most expensive to use, as they need to be constructed *every single time* they're requested, which also
+     + puts strain on the GC.
+     + ++/
     Transient,
 
-    /// The service is only constructed a single time for every `ServiceProvider`, regardless of which scope is used to access it.
+    /++
+     + The service is only constructed a single time for every `ServiceProvider`, regardless of which scope is used to access it.
+     +
+     + These services are the least expensive to use, as they are only constructed a single time per `ServiceProvider`.
+     + ++/
     Singleton,
 
     /++
-     + This service is constructed once per scope.
+     + The service is constructed once per scope.
+     +
+     + These services are between `Transient` and `Singleton` in terms of performance. It mostly depends on how often scopes are created/destroyed
+     + in your program.
      +
      + See_Also:
      +  `ServiceProvider.createScope`
@@ -18,6 +30,7 @@ enum ServiceLifetime
     Scoped
 }
 
+// Mixin for things like asSingletonRuntime, or asTransient. aka: boilerplate
 private mixin template ServiceLifetimeFunctions(ServiceLifetime Lifetime)
 {
     import std.conv : to;
@@ -144,6 +157,49 @@ unittest
     );
 }
 
+/++
+ + Provides access to a service scope.
+ +
+ + Description:
+ +  The idea of having 'scopes' for services comes from the fact that this library was inspired by ASP Core's Dependency Injection,
+ +  which provides similar functionality.
+ +
+ +  In ASP Core there is a need for each HTTP request to have its own 'ecosystem' for services (its own 'scope').
+ +
+ +  For example, you don't want your database context to be shared between different requests at the same time, as each request needs
+ +  to make/discard their own chnages to the database. Having a seperate database context between each request (scope) allows this to be
+ +  achieved easily.
+ +
+ +  For a lot of programs, you probably won't need to use scopes at all, and can simply use `ServiceProvider.defaultScope` for all of your
+ +  needs. Use what's best for your case.
+ +
+ +  See https://docs.microsoft.com/en-us/aspnet/core/fundamentals/dependency-injection as the documentation there is mostly appropriate for this library as well.
+ +
+ + Master & Slave `ServiceScope`:
+ +  There are two variants of `ServiceScope` that can be accessed - master scopes, and slave scopes.
+ +
+ +  The principal is pretty simple: Master scopes are the 'true' accessor to the scope so therefore contain the ability to also destroy the scope.
+ +
+ +  Slave scopes, however, can be seen more as a 'reference' accessor to the scope, meaning that they cannot destroy the underlying scope in anyway.
+ +
+ + Destroying a scope:
+ +  There are two ways for a service scope to be destroyed.
+ +
+ +  1. The master `ServiceScope` object has its dtor run. Because the `ServiceScope` is the master accessor, then the scope's lifetime is directly tied to the `ServiceScope`'s lifetime.
+ +
+ +  2. A call to `ServiceProvider.destroyScope` is made, where a master `ServiceScope` is passed to it.
+ +
+ +  The `ServiceScope` object is non-copyable, so can only be moved via functions like `std.algorithm.mutation.move`
+ +
+ +  Currently when a scope it destroyed nothing really happens except that the `ServiceProvider` clears its cache of service instances for that specific scope, and allows
+ +  another scope to be created in its place.
+ +
+ +  In the future I will be adding more functionality onto when a scope is destroyed, as the current behaviour is a bit undesirable for multiple reasons (e.g.
+ +  if you destroy a scope, any uses of a `ServiceScopeAccessor` for the destroyed scope can trigger a bug-check assert).
+ +
+ + See_Also:
+ +  `ServiceProvider.createScope`, `ServiceProvider.destroyScope`
+ + ++/
 struct ServiceScope
 {
     private size_t          _index;
@@ -159,11 +215,17 @@ struct ServiceScope
             this._provider.destroyScope(this);
     }
 
+    /++
+     + Attempts to retrieve a service of the given `baseType`, otherwise returns `null`.
+     + ++/
     Object getServiceOrNull(TypeInfo baseType)
     {
         return this._provider.getServiceOrNull(baseType, this);
     }
 
+    /++
+     + Attempts to retrieve a service of the given base type `T`, otherwise returns `null`.
+     + ++/
     T getServiceOrNull(alias T)()
     if(ServiceInfo.isValidBaseType!T)
     {
@@ -199,9 +261,23 @@ struct ServiceScope
     }
 }
 
+// Not an interface since a testing-specific implementation has no worth atm, and it'd mean making `serviceScope` virtual.
+/++
+ + A built-in service that allows access to a slave `ServiceScope` for whichever scope this service
+ + was constructed for.
+ +
+ + Description:
+ +  Because `ServiceScope` cannot be copied, it can be a bit annoying for certain services to gain access to it should they need
+ +  manual access of fetching scoped services.
+ +
+ +  As an alternative, services can be injected with this helper service which allows the creation of slave `ServiceScope`s.
+ +
+ + See_Also:
+ +  The documentation for `ServiceScope`.
+ + ++/
 final class ServiceScopeAccessor
 {
-    // Since ServiceScope can't be copied, and we shouldn't exactly move it from it's default location, we need to re-store
+    // Since ServiceScope can't be copied, and we shouldn't exactly move it from its default location, we need to re-store
     // some of its info for later.
     private ServiceProvider _provider; 
     private size_t          _index;
@@ -212,13 +288,20 @@ final class ServiceScopeAccessor
         this._index    = serviceScope._index;
     }
 
+    /++
+     + Returns: A slave `ServiceScope`.
+     + ++/
     @property @safe @nogc
-    final ServiceScope serviceScope() nothrow pure
+    ServiceScope serviceScope() nothrow pure
     {
         return ServiceScope(this._index, this._provider, false); // false = Not master scope object.
     }
 }
 
+// Not an interface since a testing-specific implementation has little worth atm, and it'd mean making functions virtual.
+/++
+ + Provides most of the functionality for managing and using services.
+ + ++/
 final class ServiceProvider
 {
     import std.typecons : Nullable, nullable;
@@ -322,6 +405,17 @@ final class ServiceProvider
         }
     }
 
+    /++
+     + Constructs a new `ServiceProvider` that makes use of the given `services`.
+     +
+     + Builtin_Services:
+     +  * [Singleton] `ServiceProvider` - `this`
+     +  
+     +  * [Scoped] `ServiceScopeAccessor` - A service for easily accessing slave `ServiceScope`s.
+     +
+     + Params:
+     +  services = Information about all of the services that can be provided.
+     + ++/
     this(ServiceInfo[] services)
     {
         this._defaultScope = this.createScope();
@@ -346,6 +440,21 @@ final class ServiceProvider
 
     public final
     {
+        /++
+         + Creates a new scope.
+         +
+         + Performance:
+         +  For creating a scope, most of the performance cost is only made during the very first creation of a scope of a specific
+         +  index. e.g. If you create scope[index=1], destroy it, then make another scope[index=1], the second scope should be made faster.
+         +
+         +  The speed difference is likely negligable either way though.
+         +
+         +  Most of the performance costs of making a scope will come from the creation of scoped services for each new scope, but those
+         +  are only performed lazily anyway.
+         +
+         + Returns:
+         +  A master `ServiceScope`.
+         + ++/
         @safe
         ServiceScope createScope()
         {
@@ -390,6 +499,19 @@ final class ServiceProvider
             assert(provider._scopeInUseMasks[0] == 0b1111);
         }
 
+        /++
+         + Destroys a scope.
+         +
+         + Behaviour:
+         +  Currently, destroying a scope simply means that the `ServiceProvider` can reuse a small amount of memory
+         +  whenever a new scope is created.
+         +
+         +  In the future I'd like to add more functionality, such as detecting scoped services that implement specific
+         +  interfaces for things such as `IDisposableService`, `IReusableService`, etc.
+         +
+         + Params:
+         +  serviceScope = The master `ServiceScope` representing the scope to destroy.
+         + ++/
         void destroyScope(ref scope ServiceScope serviceScope)
         {
             assert(serviceScope._provider is this, "Attempting to destroy service scope who does not belong to this `ServiceProvider`.");
@@ -404,6 +526,10 @@ final class ServiceProvider
             serviceScope._provider = null;
         }
 
+        /++
+         + Returns:
+         +  The `ServiceInfo` for the given `baseType`, or `null` if the `baseType` is not known by this `ServiceProvider`.
+         + ++/
         @safe
         Nullable!(const(ServiceInfo)) getServiceInfoForBaseType(TypeInfo baseType) const nothrow pure
         {
@@ -416,6 +542,7 @@ final class ServiceProvider
             return typeof(return).init;
         }
 
+        /// ditto
         Nullable!(const(ServiceInfo)) getServiceInfoForBaseType(alias BaseType)() const
         if(ServiceInfo.isValidBaseType!BaseType)
         {
@@ -440,12 +567,35 @@ final class ServiceProvider
     }
 }
 
+/++
+ + A static class containing functions to easily construct objects with Dependency Injection, or
+ + execute functions where their parameters are injected via Dependency Injection.
+ + ++/
 static final class Injector
 {
     import std.traits : ReturnType, isSomeFunction;
 
     public static final
     {
+        /++
+         + Executes a function where all of its parameters are retrieved from the given `ServiceScope`.
+         +
+         + Limitations:
+         +  Currently you cannot provide your own values for parameters that shouldn't be injected.
+         +
+         + Behaviour:
+         +  For parameters that are a `class` or `interface`, an attempt to retrieve them as a service from
+         +  `services` is made. These parameters will be `null` if no service for them was found.
+         +
+         +  For parameters of other types, they are left as their `.init` value.
+         +
+         + Params:
+         +  services = The `ServiceScope` allowing access to any services to be injected into the function call.
+         +  func     = The function to execute.
+         +
+         + Returns:
+         +  Whatever `func` returns.
+         + ++/
         ReturnType!F execute(F)(ref ServiceScope services, F func)
         if(isSomeFunction!F)
         {
@@ -484,12 +634,48 @@ static final class Injector
             assert(Injector.execute(services.defaultScope, &addAandB) == 4);
         }
 
+        /++
+         + Constructs a `class` or `struct` via Dependency Injection.
+         +
+         + Limitations:
+         +  See `Injector.execute`.
+         +
+         +  There are no guard checks implemented to ensure services with incompatible lifetimes aren't being used together.
+         +
+         +  There are no guard checks implemented to block circular references between services.
+         +
+         + Behaviour:
+         +  See `Injector.execute` for what values are injected into the ctor's parameters.
+         +
+         +  If the type has a normal ctor, then the result of `__traits(getMember, T, "__ctor")` is used as the constructor.
+         +  Types with multiple ctors are undefined behaviour.
+         +
+         +  If the type contains a static function called `injectionCtor`, then that function takes priority over any normal ctor
+         +  and will be used to construct the object. Types with multiple `injectionCtor`s are undefined behaviour.
+         +
+         +  If the type does not contain any of the above ctor functions then:
+         +   
+         +      * If the type is a class, `new T()` is used (if possible, otherwise compiler error).
+         +
+         +      * If the type is a `struct`, `T.init` is used.
+         +
+         + Params:
+         +  services = The `ServiceScope` allowing access to any services to be injected into the newly constructed object.
+         +
+         + Returns:
+         +  The newly constructed object.
+         + ++/
         T construct(alias T)(ref ServiceScope services)
         if(is(T == class) || is(T == struct))
         {
             import std.traits : Parameters;
 
-            static if(__traits(hasMember, T, "__ctor"))
+            static if(__traits(hasMember, T, "injectionCtor"))
+            {
+                alias CtorParams = Parameters!(__traits(getMember, T, "injectionCtor"));
+                return Injector.execute(services, (CtorParams params) => T.injectionCtor(params));
+            }
+            else static if(__traits(hasMember, T, "__ctor"))
             {
                 alias CtorParams = Parameters!(__traits(getMember, T, "__ctor"));
 
@@ -497,11 +683,6 @@ static final class Injector
                     return Injector.execute(services, (CtorParams params) => new T(params));
                 else
                     return Injector.execute(services, (CtorParams params) => T(params));
-            }
-            else static if(__traits(hasMember, T, "injectionCtor"))
-            {
-                alias CtorParams = Parameters!(__traits(getMember, T, "injectionCtor"));
-                return Injector.execute(services, (CtorParams params) => T.injectionCtor(params));
             }
             else
             {
