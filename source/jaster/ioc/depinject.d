@@ -212,7 +212,8 @@ final class ServiceScopeAccessor
         this._index    = serviceScope._index;
     }
 
-    final ServiceScope serviceScope()
+    @property @safe @nogc
+    final ServiceScope serviceScope() nothrow pure
     {
         return ServiceScope(this._index, this._provider, false); // false = Not master scope object.
     }
