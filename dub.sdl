@@ -1,7 +1,7 @@
 name "jioc"
 description "An inversion of control library."
 authors "Bradley Chatha (SealabJaster)"
-copyright "Copyright © 2019, Bradley Chatha (SealabJaster)"
+copyright "Copyright © 2020, Bradley Chatha (SealabJaster)"
 license "MIT"
 
 targetType "library"
