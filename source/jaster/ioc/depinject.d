@@ -114,13 +114,32 @@ struct ServiceInfo
     @safe nothrow pure
     public static
     {
-        /// Internal function. Public due to how things are coded.
+        /++
+         + An internal function, public due to necessity, however will be used to explain the `asXXXRuntime` functions.
+         +
+         + e.g. `asSingletonRuntime`, `asTransientRuntime`, and `asScopedRuntime`.
+         +
+         + Notes:
+         +  Unlike the `asTemplated` constructor (and things like `asSingleton`, `asScoped`, etc.), this function isn't able to produce
+         +  a list of dependency types, so therefore will need to be provided by you, the user, if you're hoping to make use of `ServiceProvider`'s
+         +  dependency loop guard.
+         +
+         +  You only need to provide a list of types that the `factory` function will try to directly retrieve from a `ServiceScope`, not the *entire* dependency chain.
+         + ++/
         ServiceInfo asRuntime(ServiceLifetime Lifetime)(TypeInfo baseType, TypeInfo implType, FactoryFunc factory, TypeInfo[] dependencies = null)
         {
             return ServiceInfo(baseType, implType, factory, Lifetime, dependencies);
         }
 
-        /// Internal function. Public due to how things are coded.
+        /++
+         + An internal function, public due to necessity, however will be used to explain the `asXXX` functions.
+         +
+         + e.g. `asSingleton`, `asTransient`, and `asScoped`.
+         +
+         + Notes:
+         +  This constructor is able to automatically generate the list of dependencies, which will allow `ServiceProvider` to check for
+         +  dependency loops.
+         + ++/
         ServiceInfo asTemplated(ServiceLifetime Lifetime, alias BaseType, alias ImplType)(FactoryFuncFor!ImplType factory = null)
         if(isValidBaseType!BaseType && isValidImplType!(BaseType, ImplType))
         {
@@ -184,7 +203,7 @@ unittest
     }
     
     auto deps = ServiceInfo.asScoped!WithDeps()._dependencies;
-    assert(deps.length == 2, "%s".format(deps));
+    assert(deps.length == 2);
     assert(deps[0] is typeid(C));
     assert(deps[1] is typeid(I));
 }
@@ -333,6 +352,20 @@ final class ServiceScopeAccessor
 // Not an interface since a testing-specific implementation has little worth atm, and it'd mean making functions virtual.
 /++
  + Provides most of the functionality for managing and using services.
+ +
+ + Dependency_Checking:
+ +  During construction, the `ServiceProvider` will perform a check to ensure that none of its registered services contain a 
+ +  dependency loop, i.e. making sure that no service directly/indirectly depends on itself.
+ +
+ +  If you're creating your `ServiceInfo` via the `ServiceInfo.asSingleton`, `ServiceInfo.asTransient`, or `ServiceInfo.asScoped` constructors,
+ +  then this functionality is entirely automatic.
+ +
+ +  If however you're using the `asXXXRuntime` constructor varient, then it is down to the user to provide an array of `TypeInfo` to that constructor,
+ +  representing the service's dependencies. Failing to provide the correct data will cause this guard check to not detect the loop, and later down the line
+ +  this will cause an infinite loop leading into a crash.
+ +
+ +  In the future, I may add a `version()` block that will make `ServiceProvider.getServiceOrNull` also perform dependency loop checks. The reason this is not
+ +  performed by default is due to performance concerns (especially once your services start to grow in number).
  + ++/
 final class ServiceProvider
 {
@@ -435,6 +468,90 @@ final class ServiceProvider
             services.setScopeInUse(65, false);
             assert(!services.isScopeInUse(65));
         }
+
+        @safe
+        void assertNoDependencyLoops()
+        {
+            TypeInfo[] typeToTestStack;
+            TypeInfo[] typeToTestStackWhenLoopIsFound; // Keep a copy of the stack once a loop is found, so we can print out extra info.
+            
+            @trusted
+            bool dependsOn(TypeInfo typeToTest, TypeInfo dependencyType)
+            {
+                import std.algorithm : canFind;
+
+                if(typeToTestStack.canFind!"a is b"(typeToTest))
+                    return false; // Since we would've returned true otherwise, which would end the recursion.
+
+                typeToTestStack ~= typeToTest;
+                scope(exit) typeToTestStack.length -= 1;
+
+                auto serviceInfoNullable = this.getServiceInfoForBaseType(typeToTest);
+                if(serviceInfoNullable.isNull)
+                    return false; // Since the service doesn't exist anyway.
+
+                auto serviceInfo = serviceInfoNullable.get();
+                foreach(dependency; serviceInfo._dependencies)
+                {
+                    if(dependency is dependencyType || dependsOn(cast()dependency, dependencyType))
+                    {
+                        if(typeToTestStackWhenLoopIsFound.length == 0)
+                            typeToTestStackWhenLoopIsFound = typeToTestStack.dup;
+
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            foreach(service; this._allServices)
+            {
+                if(dependsOn(service._baseType, service._baseType))
+                {
+                    import std.algorithm : map, joiner;
+
+                    import std.format : format;
+                    assert(
+                        false,
+                        "Circular dependency detected, %s depends on itself:\n%s -> %s".format(
+                            service._baseType,
+                            typeToTestStackWhenLoopIsFound.map!(t => t.toString())
+                                                          .joiner(" -> "),
+                            service._baseType
+                        )
+                    );
+                }
+            }
+        }
+        ///
+        unittest
+        {
+            import std.exception : assertThrown;
+
+            // Technically shouldn't catch asserts, but this is just for testing.
+            assertThrown!Throwable(new ServiceProvider([
+                ServiceInfo.asSingleton!CA,
+                ServiceInfo.asSingleton!CB
+            ]));
+
+            // Uncomment when tweaking with the error message.
+            // new ServiceProvider([
+            //     ServiceInfo.asSingleton!CA,
+            //     ServiceInfo.asSingleton!CB
+            // ]);
+        }
+        version(unittest) // Because of forward referencing being required.
+        {
+            static class CA
+            {
+                this(CB){}
+            }
+            static class CB
+            {
+                this(CA) {}
+            }
+        }
     }
 
     /++
@@ -444,6 +561,10 @@ final class ServiceProvider
      +  * [Singleton] `ServiceProvider` - `this`
      +  
      +  * [Scoped] `ServiceScopeAccessor` - A service for easily accessing slave `ServiceScope`s.
+     +
+     + Assertions:
+     +  No service inside of `services` is allowed to directly or indirectly depend on itself.
+     +  e.g. A depends on B which depends on A. This is not allowed.
      +
      + Params:
      +  services = Information about all of the services that can be provided.
@@ -468,6 +589,8 @@ final class ServiceProvider
 
             return instance;            
         });
+
+        this.assertNoDependencyLoops();
     }
 
     public final
@@ -674,7 +797,8 @@ static final class Injector
          +
          +  There are no guard checks implemented to ensure services with incompatible lifetimes aren't being used together.
          +
-         +  There are no guard checks implemented to block circular references between services.
+         +  There are no guard checks implemented to block circular references between services. However, `ServiceProvider` does contain
+         +  a check for this, please refer to its documentation.
          +
          + Behaviour:
          +  See `Injector.execute` for what values are injected into the ctor's parameters.
@@ -702,21 +826,23 @@ static final class Injector
         {
             import std.traits : Parameters;
 
-            static if(__traits(hasMember, T, "injectionCtor"))
+            alias Ctor = Injector.FindCtor!T;
+
+            static if(Injector.isStaticFuncCtor!Ctor) // Special ctors like `injectionCtor`
             {
-                alias CtorParams = Parameters!(__traits(getMember, T, "injectionCtor"));
+                alias CtorParams = Parameters!Ctor;
                 return Injector.execute(services, (CtorParams params) => T.injectionCtor(params));
             }
-            else static if(__traits(hasMember, T, "__ctor"))
+            else static if(Injector.isBuiltinCtor!Ctor) // Normal ctor
             {
-                alias CtorParams = Parameters!(__traits(getMember, T, "__ctor"));
+                alias CtorParams = Parameters!Ctor;
 
                 static if(is(T == class))
                     return Injector.execute(services, (CtorParams params) => new T(params));
                 else
                     return Injector.execute(services, (CtorParams params) => T(params));
             }
-            else
+            else // NoValidCtor
             {
                 static if(is(T == class))
                     return new T();
@@ -725,7 +851,20 @@ static final class Injector
             }
         }
 
+        /// `FindCtor` will evaluate to this no-op function if it can't find a proper ctor.
         static void NoValidCtor(){}
+
+        /++
+         + Finds the most appropriate ctor for use with injection.
+         +
+         + Notes:
+         +  Types that have multiple overloads of a ctor produce undefined behaviour.
+         +
+         +  You can use `Injector.isBuiltinCtor` and `Injector.isStaticFuncCtor` to determine what type of Ctor was chosen.
+         +
+         + Returns:
+         +  Either the type's `__ctor`, the type's `injectionCtor`, or `NoValidCtor` if no appropriate ctor was found.
+         + ++/
         template FindCtor(T)
         {
             static if(__traits(hasMember, T, "injectionCtor"))
@@ -735,6 +874,9 @@ static final class Injector
             else
                 alias FindCtor = NoValidCtor;
         }
+
+        enum isBuiltinCtor(alias F)     = __traits(identifier, F) == "__ctor";
+        enum isStaticFuncCtor(alias F)  = !isBuiltinCtor!F && __traits(identifier, F) != "NoValidCtor";
     }
 }
 
