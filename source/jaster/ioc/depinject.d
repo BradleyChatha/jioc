@@ -34,35 +34,20 @@ enum ServiceLifetime
 private mixin template ServiceLifetimeFunctions(ServiceLifetime Lifetime)
 {
     import std.conv : to;
-    enum Suffix = Lifetime.to!string; // I *wish* this could be `const` instead of `enum`, but it produces a weird `cannot modify struct because immutable members` error.
+    enum Suffix         = Lifetime.to!string; // I *wish* this could be `const` instead of `enum`, but it produces a weird `cannot modify struct because immutable members` error.
+    enum FullLifetime   = "ServiceLifetime."~Suffix;
 
     @safe nothrow pure
     public static
     {
         ///
-        ServiceInfo asRuntime(TypeInfo baseType, TypeInfo implType, FactoryFunc factory = null)
-        {
-            return ServiceInfo(baseType, implType, factory, Lifetime);
-        }
+        mixin("alias as"~Suffix~"Runtime = asRuntime!("~FullLifetime~");");
 
         ///
-        ServiceInfo asTemplated(alias BaseType, alias ImplType)(FactoryFuncFor!ImplType factory = null)
-        if(isValidBaseType!BaseType && isValidImplType!(BaseType, ImplType))
-        {
-            if(factory is null)
-                factory = (ref services) => Injector.construct!ImplType(services);
-
-            return ServiceInfo(typeid(BaseType), typeid(ImplType), factory, Lifetime);
-        }
+        mixin("alias as"~Suffix~"(alias BaseType, alias ImplType) = asTemplated!("~FullLifetime~", BaseType, ImplType);");
 
         ///
-        mixin("alias as"~Suffix~"Runtime = asRuntime;");
-
-        ///
-        mixin("alias as"~Suffix~"(alias BaseType, alias ImplType) = asTemplated!(BaseType, ImplType);");
-
-        ///
-        mixin("alias as"~Suffix~"(alias ImplType) = asTemplated!(ImplType, ImplType);");
+        mixin("alias as"~Suffix~"(alias ImplType) = asTemplated!("~FullLifetime~", ImplType, ImplType);");
     }
 }
 
@@ -122,6 +107,26 @@ struct ServiceInfo
 
         // NOTE: This is just something completely random I made up. I'll research into a proper technique eventually, this just has to exist *in some form* for now.
         return (baseTypePointer ^ implTypePointer) * lifetimeAsNumber;
+    }
+
+    @safe nothrow pure
+    public static
+    {
+        /// Internal function. Public due to how things are coded.
+        ServiceInfo asRuntime(ServiceLifetime Lifetime)(TypeInfo baseType, TypeInfo implType, FactoryFunc factory = null)
+        {
+            return ServiceInfo(baseType, implType, factory, Lifetime);
+        }
+
+        /// Internal function. Public due to how things are coded.
+        ServiceInfo asTemplated(ServiceLifetime Lifetime, alias BaseType, alias ImplType)(FactoryFuncFor!ImplType factory = null)
+        if(isValidBaseType!BaseType && isValidImplType!(BaseType, ImplType))
+        {
+            if(factory is null)
+                factory = (ref services) => Injector.construct!ImplType(services);
+
+            return ServiceInfo(typeid(BaseType), typeid(ImplType), factory, Lifetime);
+        }
     }
 
     mixin ServiceLifetimeFunctions!(ServiceLifetime.Singleton);
