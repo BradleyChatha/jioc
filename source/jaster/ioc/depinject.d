@@ -34,8 +34,8 @@ enum ServiceLifetime
 private mixin template ServiceLifetimeFunctions(ServiceLifetime Lifetime)
 {
     import std.conv : to;
-    enum Suffix         = Lifetime.to!string; // I *wish* this could be `const` instead of `enum`, but it produces a weird `cannot modify struct because immutable members` error.
-    enum FullLifetime   = "ServiceLifetime."~Suffix;
+    static immutable Suffix         = Lifetime.to!string;
+    static immutable FullLifetime   = "ServiceLifetime."~Suffix;
 
     @safe nothrow pure
     public static
