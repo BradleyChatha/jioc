@@ -139,6 +139,8 @@ struct ServiceInfo
          + Notes:
          +  This constructor is able to automatically generate the list of dependencies, which will allow `ServiceProvider` to check for
          +  dependency loops.
+         +
+         +  If `factory` is `null`, then the factory becomes a call to `Injector.construct!ImplType`, which should be fine for most cases.
          + ++/
         ServiceInfo asTemplated(ServiceLifetime Lifetime, alias BaseType, alias ImplType)(FactoryFuncFor!ImplType factory = null)
         if(isValidBaseType!BaseType && isValidImplType!(BaseType, ImplType))
