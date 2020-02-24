@@ -34,8 +34,8 @@ enum ServiceLifetime
 private mixin template ServiceLifetimeFunctions(ServiceLifetime Lifetime)
 {
     import std.conv : to;
-    static immutable Suffix         = Lifetime.to!string;
-    static immutable FullLifetime   = "ServiceLifetime."~Suffix;
+    static immutable Suffix       = Lifetime.to!string;
+    static immutable FullLifetime = "ServiceLifetime."~Suffix;
 
     @safe nothrow pure
     public static
