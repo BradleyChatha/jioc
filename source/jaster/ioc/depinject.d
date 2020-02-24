@@ -72,14 +72,16 @@ struct ServiceInfo
         TypeInfo        _implType;
         FactoryFunc     _factory;
         ServiceLifetime _lifetime;
+        TypeInfo[]      _dependencies;
 
         @safe @nogc
-        this(TypeInfo baseType, TypeInfo implType, FactoryFunc func, ServiceLifetime lifetime) nothrow pure
+        this(TypeInfo baseType, TypeInfo implType, FactoryFunc func, ServiceLifetime lifetime, TypeInfo[] dependencies) nothrow pure
         {
-            this._baseType = baseType;
-            this._implType = implType;
-            this._factory  = func;
-            this._lifetime = lifetime;
+            this._baseType      = baseType;
+            this._implType      = implType;
+            this._factory       = func;
+            this._lifetime      = lifetime;
+            this._dependencies  = dependencies;
 
             assert(func !is null, "The factory function is null. The `asXXXRuntime` functions can't auto-generate one sadly, so provide your own.");
         }
@@ -113,19 +115,33 @@ struct ServiceInfo
     public static
     {
         /// Internal function. Public due to how things are coded.
-        ServiceInfo asRuntime(ServiceLifetime Lifetime)(TypeInfo baseType, TypeInfo implType, FactoryFunc factory = null)
+        ServiceInfo asRuntime(ServiceLifetime Lifetime)(TypeInfo baseType, TypeInfo implType, FactoryFunc factory, TypeInfo[] dependencies = null)
         {
-            return ServiceInfo(baseType, implType, factory, Lifetime);
+            return ServiceInfo(baseType, implType, factory, Lifetime, dependencies);
         }
 
         /// Internal function. Public due to how things are coded.
         ServiceInfo asTemplated(ServiceLifetime Lifetime, alias BaseType, alias ImplType)(FactoryFuncFor!ImplType factory = null)
         if(isValidBaseType!BaseType && isValidImplType!(BaseType, ImplType))
         {
+            import std.meta : Filter;
+            import std.traits : Parameters;
+
+            enum isClassOrInterface(T)  = is(T == class) || is(T == interface);
+            alias ImplTypeCtor          = Injector.FindCtor!ImplType;
+            alias CtorParams            = Parameters!ImplTypeCtor;
+            alias CtorParamsFiltered    = Filter!(isClassOrInterface, CtorParams);
+
+            TypeInfo[] deps;
+            deps.length = CtorParamsFiltered.length;
+
+            static foreach(i, dep; CtorParamsFiltered)
+                deps[i] = typeid(dep);
+
             if(factory is null)
                 factory = (ref services) => Injector.construct!ImplType(services);
 
-            return ServiceInfo(typeid(BaseType), typeid(ImplType), factory, Lifetime);
+            return ServiceInfo(typeid(BaseType), typeid(ImplType), factory, Lifetime, deps);
         }
     }
 
@@ -134,7 +150,7 @@ struct ServiceInfo
     mixin ServiceLifetimeFunctions!(ServiceLifetime.Scoped);
 }
 ///
-@safe nothrow pure
+//@safe nothrow pure
 unittest
 {
     static interface I {}
@@ -146,20 +162,31 @@ unittest
     assert(
         ServiceInfo.asSingletonRuntime(typeid(I), typeid(C), &dummyFactory)
         ==
-        ServiceInfo(typeid(I), typeid(C), &dummyFactory, ServiceLifetime.Singleton)
+        ServiceInfo(typeid(I), typeid(C), &dummyFactory, ServiceLifetime.Singleton, null)
     );
 
     assert(
         ServiceInfo.asTransient!(I, C)((ref provider) => new C())
         ==
-        ServiceInfo(typeid(I), typeid(C), &dummyFactory, ServiceLifetime.Transient) // NOTE: Factory func is ignored in opEquals, so `dummyFactory` here is fine.
+        ServiceInfo(typeid(I), typeid(C), &dummyFactory, ServiceLifetime.Transient, null) // NOTE: Factory func is ignored in opEquals, so `dummyFactory` here is fine.
     );
 
     assert(
         ServiceInfo.asScoped!C()
         ==
-        ServiceInfo(typeid(C), typeid(C), &dummyFactory, ServiceLifetime.Scoped)
+        ServiceInfo(typeid(C), typeid(C), &dummyFactory, ServiceLifetime.Scoped, null)
     );
+
+    // opEquals and opHash don't care about dependencies (technically I think they should, but meh), so we have to test directly.
+    static class WithDeps
+    {
+        this(C c, I i, int a){}
+    }
+    
+    auto deps = ServiceInfo.asScoped!WithDeps()._dependencies;
+    assert(deps.length == 2, "%s".format(deps));
+    assert(deps[0] is typeid(C));
+    assert(deps[1] is typeid(I));
 }
 
 /++
@@ -696,6 +723,17 @@ static final class Injector
                 else
                     return T.init;
             }
+        }
+
+        static void NoValidCtor(){}
+        template FindCtor(T)
+        {
+            static if(__traits(hasMember, T, "injectionCtor"))
+                alias FindCtor = __traits(getMember, T, "injectionCtor");
+            else static if(__traits(hasMember, T, "__ctor"))
+                alias FindCtor = __traits(getMember, T, "__ctor");
+            else
+                alias FindCtor = NoValidCtor;
         }
     }
 }
