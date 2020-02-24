@@ -368,6 +368,21 @@ final class ServiceScopeAccessor
  +
  +  In the future, I may add a `version()` block that will make `ServiceProvider.getServiceOrNull` also perform dependency loop checks. The reason this is not
  +  performed by default is due to performance concerns (especially once your services start to grow in number).
+ +
+ + Lifetime_Checking:
+ +  During construction, the `ServiceProvider` will perform a check to ensure that none of its registered services contains a dependency on
+ +  another service with an incompatible lifetime.
+ +
+ +  Likewise with depenency checking (see section above), you will need to ensure that you provide the correct data when using the `asXXXRuntime` constructors
+ +  for `ServiceInfo`.
+ +
+ +  The following is a table of valid lifetime pairings:
+ +
+ +      * Transient - [Transient, Singleton]
+ +
+ +      * Scoped - [Transient, Scoped, Singleton]
+ +
+ +      * Singleton - [Transient, Singleton]
  + ++/
 final class ServiceProvider
 {
@@ -472,6 +487,87 @@ final class ServiceProvider
         }
 
         @safe
+        void assertLifetimesAreCompatible()
+        {
+            @safe
+            bool areCompatible(const ServiceLifetime consumer, const ServiceLifetime dependency)
+            {
+                final switch(consumer) with(ServiceLifetime)
+                {
+                    case Transient:
+                    case Singleton:
+                        return dependency != Scoped;
+
+                    case Scoped:
+                        return true;
+                }
+            }
+
+            foreach(service; this._allServices)
+            {
+                foreach(dependency; service._dependencies)
+                {
+                    auto dependencyInfo = this.getServiceInfoForBaseType(dependency);
+                    if(dependencyInfo.isNull)
+                        continue;
+
+                    if(!areCompatible(service._lifetime, dependencyInfo.get._lifetime))
+                    {
+                        import std.format : format;
+                        assert(
+                            false,
+                            "%s service %s cannot depend on %s service %s as their lifetimes are incompatible".format(
+                                service._lifetime,
+                                service._baseType,
+                                dependencyInfo.get._lifetime,
+                                dependency
+                            )
+                        );
+                    }
+                }
+            }
+        }
+        //
+        unittest
+        {
+            import std.exception : assertThrown, assertNotThrown;
+
+            static class Scoped
+            {
+            }
+
+            static class Transient
+            {
+                this(Scoped){}
+            }
+
+            static class GoodTransient
+            {
+            }
+
+            static class GoodScoped
+            {
+                this(GoodTransient){}
+            }
+
+            assertThrown!Throwable(new ServiceProvider([
+                ServiceInfo.asScoped!Scoped,
+                ServiceInfo.asTransient!Transient
+            ]));
+
+            assertNotThrown!Throwable(new ServiceProvider([
+                ServiceInfo.asScoped!GoodScoped,
+                ServiceInfo.asTransient!GoodTransient
+            ]));
+
+            // Uncomment when tweaking the error message.
+            // new ServiceProvider([
+            //     ServiceInfo.asScoped!Scoped,
+            //     ServiceInfo.asTransient!Transient
+            // ]);
+        }
+
+        @safe
         void assertNoDependencyLoops()
         {
             TypeInfo[] typeToTestStack;
@@ -512,8 +608,8 @@ final class ServiceProvider
                 if(dependsOn(service._baseType, service._baseType))
                 {
                     import std.algorithm : map, joiner;
-
                     import std.format : format;
+
                     assert(
                         false,
                         "Circular dependency detected, %s depends on itself:\n%s -> %s".format(
@@ -593,6 +689,7 @@ final class ServiceProvider
         });
 
         this.assertNoDependencyLoops();
+        this.assertLifetimesAreCompatible();
     }
 
     public final
@@ -797,7 +894,8 @@ static final class Injector
          + Limitations:
          +  See `Injector.execute`.
          +
-         +  There are no guard checks implemented to ensure services with incompatible lifetimes aren't being used together.
+         +  There are no guard checks implemented to ensure services with incompatible lifetimes aren't being used together. However, `ServiceProvider` does contain
+         +  a check for this, please refer to its documentation.
          +
          +  There are no guard checks implemented to block circular references between services. However, `ServiceProvider` does contain
          +  a check for this, please refer to its documentation.
